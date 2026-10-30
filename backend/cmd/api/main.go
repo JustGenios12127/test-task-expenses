@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"test-task-expenses/backend/internal/adapter/telegram"
+	botapp "test-task-expenses/backend/internal/app/bot"
 	"test-task-expenses/backend/internal/config"
 )
 
@@ -19,6 +21,13 @@ func main() {
 		slog.Error("load config", "err", err)
 		os.Exit(1)
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	tgClient := telegram.NewClient(cfg.TelegramBotToken)
+	tgBot := telegram.NewBot(tgClient, botapp.NewStartHandler(tgClient))
+	go tgBot.Run(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -33,9 +42,6 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("server started", "addr", cfg.Addr())
@@ -44,6 +50,7 @@ func main() {
 
 	select {
 	case err := <-errCh:
+		stop()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server stopped", "err", err)
 			os.Exit(1)
