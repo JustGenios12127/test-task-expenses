@@ -2,26 +2,36 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	"test-task-expenses/backend/internal/app/bot"
+	expenseapp "test-task-expenses/backend/internal/app/expense"
 )
 
-var _ bot.Messenger = (*Client)(nil)
+var (
+	_ bot.Messenger     = (*Client)(nil)
+	_ expenseapp.Sender = (*Client)(nil)
+)
 
 type startHandler interface {
 	HandleStart(ctx context.Context, cmd bot.StartCommand) error
 }
 
-type Bot struct {
-	client *Client
-	start  startHandler
+type expenseHandler interface {
+	Handle(ctx context.Context, cmd expenseapp.Command) error
 }
 
-func NewBot(client *Client, start startHandler) *Bot {
-	return &Bot{client: client, start: start}
+type Bot struct {
+	client   *Client
+	start    startHandler
+	expenses expenseHandler
+}
+
+func NewBot(client *Client, start startHandler, expenses expenseHandler) *Bot {
+	return &Bot{client: client, start: start, expenses: expenses}
 }
 
 func (b *Bot) Run(ctx context.Context) {
@@ -51,28 +61,41 @@ func (b *Bot) Run(ctx context.Context) {
 		}
 
 		for _, upd := range updates {
+			if err := dispatch(ctx, b.start, b.expenses, upd); err != nil {
+				slog.Error("telegram update", "err", err, "update_id", upd.UpdateID)
+			}
 			if next := upd.UpdateID + 1; next > offset {
 				offset = next
-			}
-			if err := dispatch(ctx, b.start, upd); err != nil {
-				slog.Error("telegram update", "err", err, "update_id", upd.UpdateID)
 			}
 		}
 	}
 }
 
-func dispatch(ctx context.Context, start startHandler, upd Update) error {
-	if upd.Message == nil || !isStartCommand(upd.Message.Text) {
+func dispatch(ctx context.Context, start startHandler, expenses expenseHandler, upd Update) error {
+	if upd.Message == nil {
 		return nil
 	}
-
-	name := ""
-	if upd.Message.From != nil {
-		name = upd.Message.From.FirstName
+	text := strings.TrimSpace(upd.Message.Text)
+	if text == "" {
+		return nil
 	}
-	return start.HandleStart(ctx, bot.StartCommand{
-		ChatID:    upd.Message.Chat.ID,
-		FirstName: name,
+	if isStartCommand(text) {
+		name := ""
+		if upd.Message.From != nil {
+			name = upd.Message.From.FirstName
+		}
+		return start.HandleStart(ctx, bot.StartCommand{
+			ChatID:    upd.Message.Chat.ID,
+			FirstName: name,
+		})
+	}
+	if upd.Message.From == nil || upd.Message.From.ID <= 0 {
+		return fmt.Errorf("telegram message has no sender")
+	}
+	return expenses.Handle(ctx, expenseapp.Command{
+		UserID: upd.Message.From.ID,
+		ChatID: upd.Message.Chat.ID,
+		Text:   text,
 	})
 }
 

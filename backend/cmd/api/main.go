@@ -10,9 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"test-task-expenses/backend/internal/adapter/groq"
+	"test-task-expenses/backend/internal/adapter/postgres"
 	"test-task-expenses/backend/internal/adapter/telegram"
 	botapp "test-task-expenses/backend/internal/app/bot"
+	expenseapp "test-task-expenses/backend/internal/app/expense"
 	"test-task-expenses/backend/internal/config"
+	"test-task-expenses/backend/internal/migrate"
 )
 
 func main() {
@@ -21,12 +25,38 @@ func main() {
 		slog.Error("load config", "err", err)
 		os.Exit(1)
 	}
+	loc, err := cfg.Location()
+	if err != nil {
+		slog.Error("load timezone", "err", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	migrateCtx, cancelMigrate := context.WithTimeout(ctx, 30*time.Second)
+	err = migrate.Up(migrateCtx, cfg.PostgresDSN())
+	cancelMigrate()
+	if err != nil {
+		slog.Error("migrate", "err", err)
+		os.Exit(1)
+	}
+
+	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN())
+	if err != nil {
+		slog.Error("connect postgres", "err", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
 	tgClient := telegram.NewClient(cfg.TelegramBotToken)
-	tgBot := telegram.NewBot(tgClient, botapp.NewStartHandler(tgClient))
+	expenses := expenseapp.NewHandler(
+		expenseapp.WithFallback(groq.NewParser(cfg.GroqAPIKey, cfg.GroqModel)),
+		postgres.NewExpenseRepository(pool),
+		tgClient,
+		loc,
+	)
+	tgBot := telegram.NewBot(tgClient, botapp.NewStartHandler(tgClient), expenses)
 	go tgBot.Run(ctx)
 
 	mux := http.NewServeMux()

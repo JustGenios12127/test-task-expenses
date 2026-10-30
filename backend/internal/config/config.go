@@ -7,6 +7,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
+
+	_ "time/tzdata"
 )
 
 type Config struct {
@@ -18,7 +21,9 @@ type Config struct {
 	PostgresDB       string
 	PostgresSSLMode  string
 	GroqAPIKey       string
+	GroqModel        string
 	TelegramBotToken string
+	Timezone         string
 }
 
 func Load() (Config, error) {
@@ -35,7 +40,9 @@ func Load() (Config, error) {
 		PostgresDB:       os.Getenv("POSTGRES_DB"),
 		PostgresSSLMode:  envOr("POSTGRES_SSLMODE", "disable"),
 		GroqAPIKey:       os.Getenv("GROQ_API_KEY"),
+		GroqModel:        envOr("GROQ_MODEL", "openai/gpt-oss-20b"),
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+		Timezone:         envOr("APP_TIMEZONE", "Asia/Yekaterinburg"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -47,6 +54,14 @@ func Load() (Config, error) {
 
 func (c Config) Addr() string {
 	return ":" + c.HTTPPort
+}
+
+func (c Config) Location() (*time.Location, error) {
+	loc, err := time.LoadLocation(c.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("APP_TIMEZONE: %w", err)
+	}
+	return loc, nil
 }
 
 func (c Config) PostgresDSN() string {

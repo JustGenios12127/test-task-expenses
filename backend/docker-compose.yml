@@ -11,6 +11,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      MIGRATIONS_DIR: /app/migration
     ports:
       - "${HTTP_PORT}:${HTTP_PORT}"
     depends_on:

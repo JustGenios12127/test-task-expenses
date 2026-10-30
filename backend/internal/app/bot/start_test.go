@@ -32,7 +32,7 @@ func TestHandleStartGreetsByName(t *testing.T) {
 	if messenger.chatID != 42 {
 		t.Fatalf("chat id = %d, want 42", messenger.chatID)
 	}
-	const want = "Привет, Анна!\n\nЯ помогу записывать расходы. Напиши, например: «кофе 350»."
+	const want = "Привет, Анна!\n\nЯ помогу записывать расходы."
 	if messenger.text != want {
 		t.Fatalf("text = %q, want %q", messenger.text, want)
 	}
@@ -45,7 +45,7 @@ func TestHandleStartWithoutName(t *testing.T) {
 	if err := handler.HandleStart(context.Background(), StartCommand{ChatID: 7}); err != nil {
 		t.Fatalf("HandleStart: %v", err)
 	}
-	const want = "Привет!\n\nЯ помогу записывать расходы. Напиши, например: «кофе 350»."
+	const want = "Привет!\n\nЯ помогу записывать расходы."
 	if messenger.text != want {
 		t.Fatalf("text = %q, want %q", messenger.text, want)
 	}
