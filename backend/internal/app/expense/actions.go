@@ -55,7 +55,8 @@ func (h *Handler) update(ctx context.Context, cmd Command, intent domain.Intent,
 	if !patch.SpentAt.IsZero() && patch.SpentAt.After(domain.DateUTC(today)) {
 		return h.reply(ctx, cmd, "Дата траты не может быть позже сегодняшнего дня.")
 	}
-	found, err := h.locate(ctx, cmd, clarifyTarget(cmd.Text, intent), today)
+	target := clarifyTarget(cmd.Text, intent)
+	found, err := h.locate(ctx, cmd, target, today, target.Amount > 0)
 	if err != nil {
 		if reply, ok := h.lookupReply(err); ok {
 			return h.reply(ctx, cmd, reply)
@@ -77,7 +78,7 @@ func (h *Handler) remove(ctx context.Context, cmd Command, intent domain.Intent,
 	if !hasTarget(intent) {
 		return h.reply(ctx, cmd, "Уточни, какую трату удалить. Например: «удали такси».")
 	}
-	found, err := h.locate(ctx, cmd, intent, today)
+	found, err := h.locate(ctx, cmd, intent, today, false)
 	if err != nil {
 		if reply, ok := h.lookupReply(err); ok {
 			return h.reply(ctx, cmd, reply)
@@ -107,7 +108,7 @@ func (h *Handler) lookupReply(err error) (string, bool) {
 	}
 }
 
-func (h *Handler) locate(ctx context.Context, cmd Command, intent domain.Intent, today time.Time) (domain.Expense, error) {
+func (h *Handler) locate(ctx context.Context, cmd Command, intent domain.Intent, today time.Time, loose bool) (domain.Expense, error) {
 	if intent.Index > 0 {
 		item, err := h.shownExpense(ctx, cmd.UserID, intent.Index)
 		if err == nil || !errors.Is(err, errNoShown) {
@@ -118,15 +119,12 @@ func (h *Handler) locate(ctx context.Context, cmd Command, intent domain.Intent,
 		}
 	}
 	found, err := h.store.FindLatest(ctx, matchQuery(cmd.UserID, intent, today))
-	if err == nil || !errors.Is(err, domain.ErrNotFound) || intent.Match == "" {
+	if err == nil || !errors.Is(err, domain.ErrNotFound) || intent.Match == "" || !loose {
 		return found, err
 	}
-	if intent.Amount == 0 && intent.Category == "" && intent.SpentAt.IsZero() && intent.From.IsZero() && intent.To.IsZero() && intent.Period == "" {
-		return found, err
-	}
-	loose := intent
-	loose.Match = ""
-	return h.store.FindLatest(ctx, matchQuery(cmd.UserID, loose, today))
+	unnamed := intent
+	unnamed.Match = ""
+	return h.store.FindLatest(ctx, matchQuery(cmd.UserID, unnamed, today))
 }
 
 func (h *Handler) shownExpense(ctx context.Context, userID int64, index int) (domain.Expense, error) {

@@ -14,8 +14,6 @@ import (
 	domain "test-task-expenses/backend/internal/domain/expense"
 )
 
-const defaultURL = "https://api.groq.com/openai/v1/chat/completions"
-
 type Parser struct {
 	apiKey     string
 	model      string
@@ -23,11 +21,11 @@ type Parser struct {
 	httpClient *http.Client
 }
 
-func NewParser(apiKey, model string) *Parser {
+func NewParser(apiKey, model, url string) *Parser {
 	return &Parser{
 		apiKey: apiKey,
 		model:  model,
-		url:    defaultURL,
+		url:    url,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 		},
@@ -196,7 +194,10 @@ func (p *Parser) post(ctx context.Context, payload []byte) (*http.Response, []by
 }
 
 func isRateLimit(resp *http.Response, raw []byte) bool {
-	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+	if resp == nil || resp.StatusCode == http.StatusOK {
+		return false
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
 		return true
 	}
 	return strings.Contains(strings.ToLower(string(raw)), "rate limit")

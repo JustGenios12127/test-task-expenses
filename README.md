@@ -4,11 +4,13 @@
 
 ## Запуск
 
-Нужен установленный Docker. Настройки лежат в `backend/.env`: база, порт, ключ Groq и токен Telegram. Этот файл в репозиторий не входит, его нужно создать локально.
+Нужен установленный Docker. Настройки лежат в `backend/.env`: база, доступ к LLM и токен Telegram. Этот файл в репозиторий не входит, его нужно создать из шаблона и вписать `GROQ_API_KEY` и `TELEGRAM_BOT_TOKEN`.
 
 ```bash
-cd backend
-docker compose up --build
+cp backend/.env.example backend/.env
+docker compose up --build -d
 ```
 
-После запуска API доступен на порту из `HTTP_PORT`. По умолчанию это [http://localhost:8080](http://localhost:8080).
+LLM настраивается переменными `GROQ_API_KEY`, `GROQ_MODEL` и `GROQ_API_URL`. Подойдёт любой сервис с OpenAI-совместимым API chat completions.
+
+После запуска панель главы семьи открывается на [http://localhost](http://localhost). API доступен на [http://localhost:8080](http://localhost:8080).

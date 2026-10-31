@@ -78,6 +78,17 @@ func TestAPIError(t *testing.T) {
 	}
 }
 
+func TestNetworkErrorHidesToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	client := testClient(t, server)
+	server.Close()
+
+	err := client.SendText(context.Background(), 1, "hi")
+	if err == nil || strings.Contains(err.Error(), "token") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func testClient(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 	client := NewClient("token")

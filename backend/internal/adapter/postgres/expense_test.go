@@ -229,3 +229,88 @@ func savedExpense(t *testing.T, userID, amount int64, category domain.Category, 
 	}
 	return item
 }
+
+func TestPanelFiltersAndVersion(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+
+	t.Setenv("MIGRATIONS_DIR", filepath.Join("..", "..", "..", "migration"))
+	ctx := context.Background()
+	if err := migrate.Up(ctx, dsn); err != nil {
+		t.Fatalf("migrate up: %v", err)
+	}
+
+	pool, err := NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	clean := func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM expenses WHERE user_id IN (30, 40)`)
+	}
+	clean()
+	t.Cleanup(clean)
+
+	repo := NewExpenseRepository(pool)
+	today := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	fuel, err := repo.Add(ctx, savedExpense(t, 30, 300000, domain.CategoryTransport, "заправка", today))
+	if err != nil {
+		t.Fatalf("add fuel: %v", err)
+	}
+	if _, err := repo.Add(ctx, savedExpense(t, 30, 99999999999, domain.CategoryOther, "машина", today.AddDate(0, -1, 0))); err != nil {
+		t.Fatalf("add car: %v", err)
+	}
+	if _, err := repo.Add(ctx, savedExpense(t, 30, 99999999999, domain.CategoryOther, "машина", today.AddDate(0, -1, 0))); err != nil {
+		t.Fatalf("add second car: %v", err)
+	}
+	if _, err := repo.Add(ctx, savedExpense(t, 40, 50000, domain.CategoryTransport, "такси", today)); err != nil {
+		t.Fatalf("add taxi: %v", err)
+	}
+
+	filter := domain.FamilyFilter{
+		UserID:   30,
+		Category: domain.CategoryTransport,
+		From:     time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		To:       time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC),
+	}
+	rows, err := repo.ListFamily(ctx, filter)
+	if err != nil {
+		t.Fatalf("list family: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != fuel.ID {
+		t.Fatalf("rows = %+v", rows)
+	}
+	total, count, err := repo.FamilyTotal(ctx, domain.FamilyFilter{UserID: 30})
+	if err != nil {
+		t.Fatalf("family total: %v", err)
+	}
+	if total != 300000+2*99999999999 || count != 3 {
+		t.Fatalf("total = %d count = %d", total, count)
+	}
+	if own, _, err := repo.Total(ctx, domain.Query{UserID: 30}); err != nil || own != total {
+		t.Fatalf("bot total = %d err = %v", own, err)
+	}
+
+	found, err := repo.FindLatest(ctx, domain.Query{UserID: 30, Match: "заправку"})
+	if err != nil || found.ID != fuel.ID {
+		t.Fatalf("stem match = %+v err = %v", found, err)
+	}
+
+	edit := fuel
+	edit.Amount = 310000
+	saved, err := repo.Replace(ctx, fuel.ID, edit, fuel.UpdatedAt)
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if _, err := repo.Replace(ctx, fuel.ID, edit, fuel.UpdatedAt); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale replace = %v", err)
+	}
+	if _, err := repo.Replace(ctx, fuel.ID, edit, saved.UpdatedAt); err != nil {
+		t.Fatalf("fresh replace: %v", err)
+	}
+	if _, err := repo.Replace(ctx, 1<<40, edit, saved.UpdatedAt); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing replace = %v", err)
+	}
+}

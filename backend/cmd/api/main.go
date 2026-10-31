@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"test-task-expenses/backend/internal/adapter/groq"
+	"test-task-expenses/backend/internal/adapter/httpapi"
 	"test-task-expenses/backend/internal/adapter/postgres"
 	"test-task-expenses/backend/internal/adapter/telegram"
 	botapp "test-task-expenses/backend/internal/app/bot"
 	expenseapp "test-task-expenses/backend/internal/app/expense"
+	"test-task-expenses/backend/internal/app/family"
 	"test-task-expenses/backend/internal/config"
 	"test-task-expenses/backend/internal/migrate"
 )
@@ -50,14 +52,21 @@ func main() {
 	defer pool.Close()
 
 	tgClient := telegram.NewClient(cfg.TelegramBotToken)
+	repo := postgres.NewExpenseRepository(pool)
 	expenses := expenseapp.NewHandler(
-		expenseapp.WithFallback(groq.NewParser(cfg.GroqAPIKey, cfg.GroqModel)),
-		postgres.NewExpenseRepository(pool),
+		expenseapp.WithFallback(groq.NewParser(cfg.GroqAPIKey, cfg.GroqModel, cfg.GroqAPIURL)),
+		repo,
 		tgClient,
 		loc,
 	)
-	tgBot := telegram.NewBot(tgClient, botapp.NewStartHandler(tgClient), expenses)
-	go tgBot.Run(ctx)
+	panel := family.NewService(repo, tgClient, loc)
+	api := httpapi.New(panel)
+	tgBot := telegram.NewBot(tgClient, botapp.NewStartHandler(tgClient), expenses, repo)
+	botDone := make(chan struct{})
+	go func() {
+		defer close(botDone)
+		tgBot.Run(ctx)
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -65,11 +74,19 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
+	mux.HandleFunc("GET /api/expenses", api.List)
+	mux.HandleFunc("POST /api/expenses", api.Create)
+	mux.HandleFunc("GET /api/members", api.Members)
+	mux.HandleFunc("PUT /api/expenses/{id}", api.Update)
+	mux.HandleFunc("DELETE /api/expenses/{id}", api.Delete)
 
 	server := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           mux,
+		Handler:           httpapi.WithCORS(mux),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
@@ -91,7 +108,7 @@ func main() {
 		slog.Info("server shutting down")
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			slog.Error("shutdown", "err", err)
-			os.Exit(1)
 		}
 	}
+	<-botDone
 }

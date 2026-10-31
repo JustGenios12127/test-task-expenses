@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -111,22 +112,15 @@ func (r *ExpenseRepository) Total(ctx context.Context, query domain.Query) (int6
 	if err != nil {
 		return 0, 0, err
 	}
-	var amountText string
+	var total int64
 	var count int
 	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
-		SELECT COALESCE(ROUND(SUM(amount), 2), 0)::text, COUNT(*)
+		SELECT COALESCE(SUM(amount * 100), 0)::bigint, COUNT(*)
 		FROM expenses
 		WHERE %s
-	`, where), args...).Scan(&amountText, &count)
+	`, where), args...).Scan(&total, &count)
 	if err != nil {
 		return 0, 0, fmt.Errorf("total expenses: %w", err)
-	}
-	if count == 0 {
-		return 0, 0, nil
-	}
-	total, err := domain.ParseAmount(amountText)
-	if err != nil {
-		return 0, 0, fmt.Errorf("parse total %q: %w", amountText, err)
 	}
 	return total, count, nil
 }
@@ -256,7 +250,7 @@ func expenseFilter(query domain.Query) (string, []any, error) {
 		parts = append(parts, fmt.Sprintf("amount = $%d::numeric", len(args)))
 	}
 	if match := strings.TrimSpace(query.Match); match != "" {
-		args = append(args, "%"+escapeLike(match)+"%", match)
+		args = append(args, likePattern(match), match)
 		pattern := len(args) - 1
 		plain := len(args)
 		parts = append(parts, fmt.Sprintf(`(COALESCE(comment, '') ILIKE $%d ESCAPE '\' OR (comment <> '' AND $%d ILIKE '%%' || comment || '%%'))`, pattern, plain))
@@ -298,6 +292,27 @@ func commentValue(patch domain.Patch) any {
 
 func escapeLike(value string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
+}
+
+func likePattern(match string) string {
+	words := strings.Fields(match)
+	for i, word := range words {
+		words[i] = escapeLike(stem(word))
+	}
+	return "%" + strings.Join(words, "%") + "%"
+}
+
+func stem(word string) string {
+	runes := []rune(word)
+	if len(runes) < 5 {
+		return word
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) {
+			return word
+		}
+	}
+	return string(runes[:len(runes)-1])
 }
 
 type scanner interface {

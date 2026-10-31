@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,6 +47,7 @@ type Message struct {
 
 type User struct {
 	ID        int64  `json:"id"`
+	Username  string `json:"username"`
 	FirstName string `json:"first_name"`
 }
 
@@ -74,6 +76,17 @@ func (c *Client) SendText(ctx context.Context, chatID int64, text string) error 
 
 func (c *Client) DeleteWebhook(ctx context.Context) error {
 	return c.do(ctx, http.MethodPost, "deleteWebhook", nil, nil, nil)
+}
+
+func (c *Client) Profile(ctx context.Context, userID int64) (string, string, error) {
+	query := url.Values{}
+	query.Set("chat_id", strconv.FormatInt(userID, 10))
+
+	var chat User
+	if err := c.do(ctx, http.MethodGet, "getChat", query, nil, &chat); err != nil {
+		return "", "", err
+	}
+	return chat.Username, chat.FirstName, nil
 }
 
 func (c *Client) GetUpdates(ctx context.Context, offset int64) ([]Update, error) {
@@ -116,6 +129,10 @@ func (c *Client) do(ctx context.Context, method, apiMethod string, query url.Val
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return fmt.Errorf("telegram %s: %w", apiMethod, err)
 	}
 	defer resp.Body.Close()

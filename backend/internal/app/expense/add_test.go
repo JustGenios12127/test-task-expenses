@@ -586,3 +586,60 @@ func newTestHandler(model Model, store Store, sender Sender, today time.Time) *H
 	handler.now = func() time.Time { return today }
 	return handler
 }
+
+type namedOnlyStore struct {
+	fakeStore
+}
+
+func (s *namedOnlyStore) FindLatest(_ context.Context, query domain.Query) (domain.Expense, error) {
+	s.findQuery = query
+	if query.Match != "" {
+		return domain.Expense{}, domain.ErrNotFound
+	}
+	return s.item, nil
+}
+
+func TestHandleDeleteDoesNotPickOtherExpense(t *testing.T) {
+	store := &namedOnlyStore{fakeStore{item: domain.Expense{
+		ID: 9, UserID: 55, Amount: 50000, Category: domain.CategoryTransport,
+		SpentAt: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC), Comment: "метро",
+	}}}
+	sender := &fakeSender{}
+	handler := newTestHandler(&fakeModel{intent: domain.Intent{
+		Action:   domain.ActionDelete,
+		Match:    "такси",
+		Amount:   50000,
+		Category: domain.CategoryTransport,
+	}}, store, sender, time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC))
+
+	if err := handler.Handle(context.Background(), Command{UserID: 55, ChatID: 77, Text: "удали такси 500"}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if store.deletedID != 0 {
+		t.Fatalf("deleted unrelated expense %d", store.deletedID)
+	}
+	if sender.text != "Не нашёл такую трату среди своих записей." {
+		t.Fatalf("reply = %q", sender.text)
+	}
+}
+
+func TestHandleUpdateFindsByOldAmount(t *testing.T) {
+	store := &namedOnlyStore{fakeStore{item: domain.Expense{
+		ID: 9, UserID: 55, Amount: 35000, Category: domain.CategoryFood,
+		SpentAt: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC), Comment: "кофе",
+	}}}
+	sender := &fakeSender{}
+	handler := newTestHandler(&fakeModel{intent: domain.Intent{
+		Action:    domain.ActionUpdate,
+		Match:     "латте",
+		Amount:    35000,
+		NewAmount: 45000,
+	}}, store, sender, time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC))
+
+	if err := handler.Handle(context.Background(), Command{UserID: 55, ChatID: 77, Text: "латте было не 350, а 450"}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if store.updatedID != 9 || store.updatedAmount != 45000 {
+		t.Fatalf("update id=%d amount=%d", store.updatedID, store.updatedAmount)
+	}
+}

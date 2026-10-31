@@ -22,6 +22,7 @@ type Config struct {
 	PostgresSSLMode  string
 	GroqAPIKey       string
 	GroqModel        string
+	GroqAPIURL       string
 	TelegramBotToken string
 	Timezone         string
 }
@@ -41,6 +42,7 @@ func Load() (Config, error) {
 		PostgresSSLMode:  envOr("POSTGRES_SSLMODE", "disable"),
 		GroqAPIKey:       os.Getenv("GROQ_API_KEY"),
 		GroqModel:        envOr("GROQ_MODEL", "openai/gpt-oss-20b"),
+		GroqAPIURL:       envOr("GROQ_API_URL", "https://api.groq.com/openai/v1/chat/completions"),
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		Timezone:         envOr("APP_TIMEZONE", "Asia/Yekaterinburg"),
 	}

@@ -32,7 +32,15 @@ var (
 	ErrFutureDate      = errors.New("future date")
 	ErrUserRequired    = errors.New("user id is required")
 	ErrNotFound        = errors.New("expense not found")
+	ErrConflict        = errors.New("expense was changed")
 )
+
+type FamilyFilter struct {
+	UserID   int64
+	Category Category
+	From     time.Time
+	To       time.Time
+}
 
 type Draft struct {
 	Amount   int64
@@ -50,6 +58,26 @@ type Expense struct {
 	Comment   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type FamilyMember struct {
+	ID        int64
+	Username  string
+	FirstName string
+}
+
+type FamilyExpense struct {
+	ID         int64
+	UserID     int64
+	Username   string
+	FirstName  string
+	HasProfile bool
+	Amount     int64
+	Category   Category
+	SpentAt    time.Time
+	Comment    string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 func Categories() []Category {

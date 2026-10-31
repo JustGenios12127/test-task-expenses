@@ -3,7 +3,12 @@ package telegram
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"test-task-expenses/backend/internal/app/bot"
 	expenseapp "test-task-expenses/backend/internal/app/expense"
@@ -78,6 +83,21 @@ func TestDispatchExpenseSeparatesUserAndChat(t *testing.T) {
 	}
 }
 
+func TestMessageProfileReadsNick(t *testing.T) {
+	id, username, firstName, ok := messageProfile(Update{
+		Message: &Message{
+			Text: "кофе 350",
+			From: &User{ID: 55, Username: "anna_k", FirstName: "Анна"},
+		},
+	})
+	if !ok || id != 55 || username != "anna_k" || firstName != "Анна" {
+		t.Fatalf("profile = %d %q %q ok=%v", id, username, firstName, ok)
+	}
+	if _, _, _, ok := messageProfile(Update{}); ok {
+		t.Fatal("expected no profile")
+	}
+}
+
 func TestDispatchExpenseRequiresSender(t *testing.T) {
 	expenses := &fakeExpenses{}
 	err := dispatch(context.Background(), &fakeStart{}, expenses, Update{
@@ -98,6 +118,77 @@ func TestDispatchReturnsHandlerError(t *testing.T) {
 	})
 	if !errors.Is(err, start.err) {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+type blockingExpenses struct {
+	release chan struct{}
+	handled chan expenseapp.Command
+}
+
+func (f *blockingExpenses) Handle(ctx context.Context, cmd expenseapp.Command) error {
+	if cmd.UserID == 1 {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	f.handled <- cmd
+	return nil
+}
+
+func TestRunDoesNotBlockOtherUsers(t *testing.T) {
+	var served atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") && served.CompareAndSwap(false, true) {
+			_, _ = w.Write([]byte(`{"ok":true,"result":[
+				{"update_id":1,"message":{"text":"кофе 350","chat":{"id":1},"from":{"id":1}}},
+				{"update_id":2,"message":{"text":"такси 500","chat":{"id":1},"from":{"id":1}}},
+				{"update_id":3,"message":{"text":"чай 100","chat":{"id":2},"from":{"id":2}}}
+			]}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+	}))
+	defer server.Close()
+
+	expenses := &blockingExpenses{release: make(chan struct{}), handled: make(chan expenseapp.Command, 3)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		NewBot(testClient(t, server), &fakeStart{}, expenses, nil).Run(ctx)
+	}()
+
+	select {
+	case cmd := <-expenses.handled:
+		if cmd.UserID != 2 {
+			t.Fatalf("first handled = %+v", cmd)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second user waited for the first one")
+	}
+
+	close(expenses.release)
+	first := <-expenses.handled
+	second := <-expenses.handled
+	if first.Text != "кофе 350" || second.Text != "такси 500" {
+		t.Fatalf("order = %q, %q", first.Text, second.Text)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bot did not stop")
 	}
 }
 
