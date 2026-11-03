@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	tele "gopkg.in/telebot.v3"
 )
 
 func TestSendText(t *testing.T) {
@@ -18,48 +21,38 @@ func TestSendText(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		gotBody = string(raw)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1,"chat":{"id":15}}}`))
 	}))
 	defer server.Close()
 
-	client := testClient(t, server)
+	client := testClient(t, server, nil)
 	if err := client.SendText(context.Background(), 15, "Привет!"); err != nil {
 		t.Fatalf("SendText: %v", err)
 	}
 	if gotPath != "/bottoken/sendMessage" {
 		t.Fatalf("path = %s", gotPath)
 	}
-	if !strings.Contains(gotBody, `"chat_id":15`) || !strings.Contains(gotBody, `"text":"Привет!"`) {
+	if !strings.Contains(gotBody, `"chat_id":"15"`) || !strings.Contains(gotBody, `"text":"Привет!"`) {
 		t.Fatalf("body = %s", gotBody)
 	}
 }
 
-func TestGetUpdates(t *testing.T) {
+func TestProfile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/bottoken/getUpdates" {
+		if r.URL.Path != "/bottoken/getChat" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("offset") != "11" {
-			t.Errorf("offset = %s", r.URL.Query().Get("offset"))
-		}
-		if r.URL.Query().Get("allowed_updates") != `["message"]` {
-			t.Errorf("allowed_updates = %s", r.URL.Query().Get("allowed_updates"))
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"result":[{"update_id":10,"message":{"text":"/start","chat":{"id":5},"from":{"first_name":"Оля"}}}]}`))
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"id":42,"type":"private","username":"anna_k","first_name":"Анна"}}`))
 	}))
 	defer server.Close()
 
-	client := testClient(t, server)
-	updates, err := client.GetUpdates(context.Background(), 11)
+	username, firstName, err := testClient(t, server, nil).Profile(context.Background(), 42)
 	if err != nil {
-		t.Fatalf("GetUpdates: %v", err)
+		t.Fatalf("Profile: %v", err)
 	}
-	if len(updates) != 1 {
-		t.Fatalf("updates = %d, want 1", len(updates))
-	}
-	if updates[0].UpdateID != 10 || updates[0].Message.Chat.ID != 5 || updates[0].Message.From.FirstName != "Оля" {
-		t.Fatalf("update = %+v", updates[0])
+	if username != "anna_k" || firstName != "Анна" {
+		t.Fatalf("profile = %q %q", username, firstName)
 	}
 }
 
@@ -71,8 +64,7 @@ func TestAPIError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := testClient(t, server)
-	err := client.SendText(context.Background(), 1, "hi")
+	err := testClient(t, server, nil).SendText(context.Background(), 1, "hi")
 	if err == nil || !strings.Contains(err.Error(), "Unauthorized") {
 		t.Fatalf("error = %v", err)
 	}
@@ -80,7 +72,7 @@ func TestAPIError(t *testing.T) {
 
 func TestNetworkErrorHidesToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	client := testClient(t, server)
+	client := testClient(t, server, nil)
 	server.Close()
 
 	err := client.SendText(context.Background(), 1, "hi")
@@ -89,10 +81,37 @@ func TestNetworkErrorHidesToken(t *testing.T) {
 	}
 }
 
-func testClient(t *testing.T, server *httptest.Server) *Client {
+func TestSendTextStopsOnContext(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := testClient(t, server, nil).SendText(ctx, 1, "hi"); err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func testClient(t *testing.T, server *httptest.Server, p tele.Poller) *Client {
 	t.Helper()
-	client := NewClient("token")
-	client.baseURL = server.URL
-	client.httpClient = server.Client()
+	if p == nil {
+		p = &poller{timeout: 0, retry: 20 * time.Millisecond}
+	}
+	client, err := newClient(tele.Settings{
+		Token:       "token",
+		URL:         server.URL,
+		Poller:      p,
+		Synchronous: true,
+		Offline:     true,
+		OnError:     logError,
+		Client:      server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
 	return client
 }

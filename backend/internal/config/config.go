@@ -1,15 +1,17 @@
 package config
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
 	"strings"
 	"time"
-
 	_ "time/tzdata"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -28,8 +30,8 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	if err := loadEnvFile(".env"); err != nil {
-		return Config{}, err
+	if err := godotenv.Load(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Config{}, fmt.Errorf("load .env: %w", err)
 	}
 
 	cfg := Config{
@@ -102,58 +104,6 @@ func (c Config) validate() error {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-func loadEnvFile(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("open env file: %w", err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			return fmt.Errorf("%s:%d: expected KEY=VALUE", path, lineNo)
-		}
-
-		key = strings.TrimSpace(key)
-		value = trimQuotes(strings.TrimSpace(value))
-		if key == "" {
-			return fmt.Errorf("%s:%d: empty key", path, lineNo)
-		}
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
-		if err := os.Setenv(key, value); err != nil {
-			return fmt.Errorf("set %s: %w", key, err)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read env file: %w", err)
-	}
-	return nil
-}
-
-func trimQuotes(value string) string {
-	if len(value) < 2 {
-		return value
-	}
-	if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
-		return value[1 : len(value)-1]
-	}
-	return value
 }
 
 func envOr(key, fallback string) string {

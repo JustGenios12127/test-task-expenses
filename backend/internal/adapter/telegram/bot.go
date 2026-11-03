@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	tele "gopkg.in/telebot.v3"
+
 	"test-task-expenses/backend/internal/app/bot"
 	expenseapp "test-task-expenses/backend/internal/app/expense"
 )
@@ -29,157 +31,130 @@ type profileStore interface {
 	SaveUser(ctx context.Context, id int64, username, firstName string) error
 }
 
+type job struct {
+	start bool
+	msg   *tele.Message
+}
+
 type Bot struct {
 	client   *Client
 	start    startHandler
 	expenses expenseHandler
 	profiles profileStore
+	ctx      context.Context
+	queues   map[int64]chan job
+	workers  sync.WaitGroup
 }
 
 func NewBot(client *Client, start startHandler, expenses expenseHandler, profiles profileStore) *Bot {
-	return &Bot{client: client, start: start, expenses: expenses, profiles: profiles}
+	b := &Bot{
+		client:   client,
+		start:    start,
+		expenses: expenses,
+		profiles: profiles,
+		ctx:      context.Background(),
+		queues:   map[int64]chan job{},
+	}
+	client.api.Handle("/start", func(c tele.Context) error {
+		return b.enqueue(job{start: true, msg: c.Message()})
+	})
+	client.api.Handle(tele.OnText, func(c tele.Context) error {
+		return b.enqueue(job{msg: c.Message()})
+	})
+	return b
 }
 
 func (b *Bot) Run(ctx context.Context) {
 	slog.Info("telegram bot started")
 	defer slog.Info("telegram bot stopped")
 
-	if err := b.client.DeleteWebhook(ctx); err != nil && ctx.Err() == nil {
-		slog.Error("delete telegram webhook", "err", err)
-	}
-
-	queues := map[int64]chan Update{}
-	var workers sync.WaitGroup
-	defer workers.Wait()
-
-	var offset int64
 	for {
-		if ctx.Err() != nil {
+		err := b.client.connect()
+		if err == nil {
+			break
+		}
+		slog.Error("telegram connect", "err", err)
+		if !wait(ctx, retryDelay) {
 			return
 		}
-
-		updates, err := b.client.GetUpdates(ctx, offset)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			slog.Error("telegram get updates", "err", err)
-			if !wait(ctx, 3*time.Second) {
-				return
-			}
-			continue
-		}
-
-		for _, upd := range updates {
-			if next := upd.UpdateID + 1; next > offset {
-				offset = next
-			}
-			key, ok := queueKey(upd)
-			if !ok {
-				continue
-			}
-			queue, exists := queues[key]
-			if !exists {
-				queue = make(chan Update, 32)
-				queues[key] = queue
-				workers.Add(1)
-				go func() {
-					defer workers.Done()
-					b.serve(ctx, queue)
-				}()
-			}
-			select {
-			case queue <- upd:
-			case <-ctx.Done():
-				return
-			}
-		}
 	}
+
+	b.ctx = ctx
+	defer b.workers.Wait()
+	go func() {
+		<-ctx.Done()
+		b.client.api.Stop()
+	}()
+	b.client.api.Start()
 }
 
-func (b *Bot) serve(ctx context.Context, queue <-chan Update) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case upd := <-queue:
-			b.remember(ctx, upd)
-			if err := dispatch(ctx, b.start, b.expenses, upd); err != nil {
-				slog.Error("telegram update", "err", err, "update_id", upd.UpdateID)
-			}
-		}
-	}
-}
-
-func queueKey(upd Update) (int64, bool) {
-	if upd.Message == nil {
-		return 0, false
-	}
-	if upd.Message.From != nil && upd.Message.From.ID > 0 {
-		return upd.Message.From.ID, true
-	}
-	return upd.Message.Chat.ID, true
-}
-
-func (b *Bot) remember(ctx context.Context, upd Update) {
-	if b.profiles == nil {
-		return
-	}
-	id, username, firstName, ok := messageProfile(upd)
-	if !ok {
-		return
-	}
-	if err := b.profiles.SaveUser(ctx, id, username, firstName); err != nil {
-		slog.Error("save telegram profile", "err", err, "user_id", id)
-	}
-}
-
-func messageProfile(upd Update) (int64, string, string, bool) {
-	if upd.Message == nil || upd.Message.From == nil || upd.Message.From.ID <= 0 {
-		return 0, "", "", false
-	}
-	user := upd.Message.From
-	return user.ID, user.Username, user.FirstName, true
-}
-
-func dispatch(ctx context.Context, start startHandler, expenses expenseHandler, upd Update) error {
-	if upd.Message == nil {
+func (b *Bot) enqueue(j job) error {
+	if j.msg == nil || j.msg.Chat == nil {
 		return nil
 	}
-	text := strings.TrimSpace(upd.Message.Text)
+	key := j.msg.Chat.ID
+	if j.msg.Sender != nil && j.msg.Sender.ID > 0 {
+		key = j.msg.Sender.ID
+	}
+	queue, ok := b.queues[key]
+	if !ok {
+		queue = make(chan job, 32)
+		b.queues[key] = queue
+		b.workers.Go(func() {
+			b.serve(queue)
+		})
+	}
+	select {
+	case queue <- j:
+	case <-b.ctx.Done():
+	}
+	return nil
+}
+
+func (b *Bot) serve(queue <-chan job) {
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case j := <-queue:
+			if err := b.process(b.ctx, j); err != nil {
+				slog.Error("telegram message", "err", err, "chat_id", j.msg.Chat.ID)
+			}
+		}
+	}
+}
+
+func (b *Bot) process(ctx context.Context, j job) error {
+	msg := j.msg
+	b.remember(ctx, msg.Sender)
+	if j.start {
+		name := ""
+		if msg.Sender != nil {
+			name = msg.Sender.FirstName
+		}
+		return b.start.HandleStart(ctx, bot.StartCommand{ChatID: msg.Chat.ID, FirstName: name})
+	}
+	if msg.Sender == nil || msg.Sender.ID <= 0 {
+		return fmt.Errorf("telegram message has no sender")
+	}
+	text := strings.TrimSpace(msg.Text)
 	if text == "" {
 		return nil
 	}
-	if isStartCommand(text) {
-		name := ""
-		if upd.Message.From != nil {
-			name = upd.Message.From.FirstName
-		}
-		return start.HandleStart(ctx, bot.StartCommand{
-			ChatID:    upd.Message.Chat.ID,
-			FirstName: name,
-		})
-	}
-	if upd.Message.From == nil || upd.Message.From.ID <= 0 {
-		return fmt.Errorf("telegram message has no sender")
-	}
-	return expenses.Handle(ctx, expenseapp.Command{
-		UserID: upd.Message.From.ID,
-		ChatID: upd.Message.Chat.ID,
+	return b.expenses.Handle(ctx, expenseapp.Command{
+		UserID: msg.Sender.ID,
+		ChatID: msg.Chat.ID,
 		Text:   text,
 	})
 }
 
-func isStartCommand(text string) bool {
-	parts := strings.Fields(text)
-	if len(parts) == 0 {
-		return false
+func (b *Bot) remember(ctx context.Context, user *tele.User) {
+	if b.profiles == nil || user == nil || user.ID <= 0 {
+		return
 	}
-	command := strings.ToLower(parts[0])
-	if at := strings.IndexByte(command, '@'); at >= 0 {
-		command = command[:at]
+	if err := b.profiles.SaveUser(ctx, user.ID, user.Username, user.FirstName); err != nil {
+		slog.Error("save telegram profile", "err", err, "user_id", user.ID)
 	}
-	return command == "/start"
 }
 
 func wait(ctx context.Context, delay time.Duration) bool {

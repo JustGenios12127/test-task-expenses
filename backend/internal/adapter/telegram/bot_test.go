@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	tele "gopkg.in/telebot.v3"
+
 	"test-task-expenses/backend/internal/app/bot"
 	expenseapp "test-task-expenses/backend/internal/app/expense"
 )
@@ -37,85 +39,70 @@ func (f *fakeExpenses) Handle(_ context.Context, cmd expenseapp.Command) error {
 	return nil
 }
 
-func TestDispatchStart(t *testing.T) {
+type fakeProfiles struct {
+	id        int64
+	username  string
+	firstName string
+}
+
+func (f *fakeProfiles) SaveUser(_ context.Context, id int64, username, firstName string) error {
+	f.id, f.username, f.firstName = id, username, firstName
+	return nil
+}
+
+func TestProcessStart(t *testing.T) {
 	start := &fakeStart{}
 	expenses := &fakeExpenses{}
-	err := dispatch(context.Background(), start, expenses, Update{
-		UpdateID: 3,
-		Message: &Message{
-			Text: "/start@ExpenseBot сейчас",
-			From: &User{FirstName: "Марк"},
-			Chat: Chat{ID: 99},
-		},
-	})
+	b := &Bot{start: start, expenses: expenses}
+	err := b.process(context.Background(), job{start: true, msg: &tele.Message{
+		Text:   "/start",
+		Sender: &tele.User{FirstName: "Марк"},
+		Chat:   &tele.Chat{ID: 99},
+	}})
 	if err != nil {
-		t.Fatalf("dispatch: %v", err)
+		t.Fatalf("process: %v", err)
 	}
-	if !start.called {
-		t.Fatal("start handler was not called")
-	}
-	if expenses.called {
-		t.Fatal("expense handler was called for /start")
+	if !start.called || expenses.called {
+		t.Fatalf("start called = %v, expenses called = %v", start.called, expenses.called)
 	}
 	if start.cmd.ChatID != 99 || start.cmd.FirstName != "Марк" {
 		t.Fatalf("command = %+v", start.cmd)
 	}
 }
 
-func TestDispatchExpenseSeparatesUserAndChat(t *testing.T) {
-	start := &fakeStart{}
+func TestProcessExpenseSeparatesUserAndChat(t *testing.T) {
 	expenses := &fakeExpenses{}
-	err := dispatch(context.Background(), start, expenses, Update{
-		Message: &Message{
-			Text: "кофе 350",
-			From: &User{ID: 55, FirstName: "Анна"},
-			Chat: Chat{ID: 77},
-		},
-	})
+	profiles := &fakeProfiles{}
+	b := &Bot{start: &fakeStart{}, expenses: expenses, profiles: profiles}
+	err := b.process(context.Background(), job{msg: &tele.Message{
+		Text:   " кофе 350 ",
+		Sender: &tele.User{ID: 55, Username: "anna_k", FirstName: "Анна"},
+		Chat:   &tele.Chat{ID: 77},
+	}})
 	if err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
-	if start.called {
-		t.Fatal("start handler was called for an expense")
+		t.Fatalf("process: %v", err)
 	}
 	if !expenses.called || expenses.cmd.UserID != 55 || expenses.cmd.ChatID != 77 || expenses.cmd.Text != "кофе 350" {
 		t.Fatalf("command = %+v", expenses.cmd)
 	}
-}
-
-func TestMessageProfileReadsNick(t *testing.T) {
-	id, username, firstName, ok := messageProfile(Update{
-		Message: &Message{
-			Text: "кофе 350",
-			From: &User{ID: 55, Username: "anna_k", FirstName: "Анна"},
-		},
-	})
-	if !ok || id != 55 || username != "anna_k" || firstName != "Анна" {
-		t.Fatalf("profile = %d %q %q ok=%v", id, username, firstName, ok)
-	}
-	if _, _, _, ok := messageProfile(Update{}); ok {
-		t.Fatal("expected no profile")
+	if profiles.id != 55 || profiles.username != "anna_k" || profiles.firstName != "Анна" {
+		t.Fatalf("profile = %+v", profiles)
 	}
 }
 
-func TestDispatchExpenseRequiresSender(t *testing.T) {
+func TestProcessExpenseRequiresSender(t *testing.T) {
 	expenses := &fakeExpenses{}
-	err := dispatch(context.Background(), &fakeStart{}, expenses, Update{
-		Message: &Message{Text: "кофе 350", Chat: Chat{ID: 1}},
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if expenses.called {
-		t.Fatal("expense handler was called without a sender")
+	b := &Bot{start: &fakeStart{}, expenses: expenses}
+	err := b.process(context.Background(), job{msg: &tele.Message{Text: "кофе 350", Chat: &tele.Chat{ID: 1}}})
+	if err == nil || expenses.called {
+		t.Fatalf("err = %v, called = %v", err, expenses.called)
 	}
 }
 
-func TestDispatchReturnsHandlerError(t *testing.T) {
+func TestProcessReturnsHandlerError(t *testing.T) {
 	start := &fakeStart{err: errors.New("send failed")}
-	err := dispatch(context.Background(), start, &fakeExpenses{}, Update{
-		Message: &Message{Text: "/start", Chat: Chat{ID: 1}},
-	})
+	b := &Bot{start: start, expenses: &fakeExpenses{}}
+	err := b.process(context.Background(), job{start: true, msg: &tele.Message{Text: "/start", Chat: &tele.Chat{ID: 1}}})
 	if !errors.Is(err, start.err) {
 		t.Fatalf("error = %v", err)
 	}
@@ -138,34 +125,56 @@ func (f *blockingExpenses) Handle(ctx context.Context, cmd expenseapp.Command) e
 	return nil
 }
 
-func TestRunDoesNotBlockOtherUsers(t *testing.T) {
-	var served atomic.Bool
+type recordingStart struct {
+	called chan bot.StartCommand
+}
+
+func (f *recordingStart) HandleStart(_ context.Context, cmd bot.StartCommand) error {
+	f.called <- cmd
+	return nil
+}
+
+func TestRunRoutesUpdatesWithoutBlockingOtherUsers(t *testing.T) {
+	var polls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if strings.HasSuffix(r.URL.Path, "/getUpdates") && served.CompareAndSwap(false, true) {
-			_, _ = w.Write([]byte(`{"ok":true,"result":[
-				{"update_id":1,"message":{"text":"кофе 350","chat":{"id":1},"from":{"id":1}}},
-				{"update_id":2,"message":{"text":"такси 500","chat":{"id":1},"from":{"id":1}}},
-				{"update_id":3,"message":{"text":"чай 100","chat":{"id":2},"from":{"id":2}}}
-			]}`))
-			return
-		}
-		if strings.HasSuffix(r.URL.Path, "/getUpdates") {
-			select {
-			case <-r.Context().Done():
-			case <-time.After(200 * time.Millisecond):
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"id":100,"is_bot":true,"username":"family_bot"}}`))
+		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+			switch polls.Add(1) {
+			case 1:
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte(`{"ok":false,"error_code":502,"description":"Bad Gateway"}`))
+			case 2:
+				_, _ = w.Write([]byte(`{"ok":true,"result":[
+					{"update_id":1,"message":{"message_id":1,"text":"кофе 350","chat":{"id":1},"from":{"id":1}}},
+					{"update_id":2,"message":{"message_id":2,"text":"такси 500","chat":{"id":1},"from":{"id":1}}},
+					{"update_id":3,"message":{"message_id":3,"text":"чай 100","chat":{"id":2},"from":{"id":2}}},
+					{"update_id":4,"message":{"message_id":4,"text":"/start@family_bot","entities":[{"type":"bot_command","offset":0,"length":17}],"chat":{"id":3},"from":{"id":3,"first_name":"Оля"}}}
+				]}`))
+			default:
+				select {
+				case <-r.Context().Done():
+				case <-time.After(100 * time.Millisecond):
+				}
+				_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
 			}
+		default:
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
 		}
-		_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
 	}))
 	defer server.Close()
 
 	expenses := &blockingExpenses{release: make(chan struct{}), handled: make(chan expenseapp.Command, 3)}
+	start := &recordingStart{called: make(chan bot.StartCommand, 1)}
+	b := NewBot(testClient(t, server, nil), start, expenses, nil)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		NewBot(testClient(t, server), &fakeStart{}, expenses, nil).Run(ctx)
+		b.Run(ctx)
 	}()
 
 	select {
@@ -175,6 +184,14 @@ func TestRunDoesNotBlockOtherUsers(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("second user waited for the first one")
+	}
+	select {
+	case cmd := <-start.called:
+		if cmd.ChatID != 3 || cmd.FirstName != "Оля" {
+			t.Fatalf("start = %+v", cmd)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("start command was not handled")
 	}
 
 	close(expenses.release)
@@ -189,28 +206,5 @@ func TestRunDoesNotBlockOtherUsers(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("bot did not stop")
-	}
-}
-
-func TestIsStartCommand(t *testing.T) {
-	tests := []struct {
-		text string
-		want bool
-	}{
-		{text: "/start", want: true},
-		{text: "/Start", want: true},
-		{text: "  /start  ", want: true},
-		{text: "/start payload", want: true},
-		{text: "/start@my_bot", want: true},
-		{text: "/stop", want: false},
-		{text: "кофе 350", want: false},
-		{text: "", want: false},
-		{text: "смотри /start", want: false},
-	}
-
-	for _, tt := range tests {
-		if got := isStartCommand(tt.text); got != tt.want {
-			t.Errorf("isStartCommand(%q) = %v, want %v", tt.text, got, tt.want)
-		}
 	}
 }

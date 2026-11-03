@@ -51,7 +51,11 @@ func main() {
 	}
 	defer pool.Close()
 
-	tgClient := telegram.NewClient(cfg.TelegramBotToken)
+	tgClient, err := telegram.NewClient(cfg.TelegramBotToken)
+	if err != nil {
+		slog.Error("create telegram client", "err", err)
+		os.Exit(1)
+	}
 	repo := postgres.NewExpenseRepository(pool)
 	expenses := expenseapp.NewHandler(
 		expenseapp.WithFallback(groq.NewParser(cfg.GroqAPIKey, cfg.GroqModel, cfg.GroqAPIURL)),

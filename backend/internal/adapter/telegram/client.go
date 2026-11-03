@@ -1,162 +1,110 @@
 package telegram
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
+
+	tele "gopkg.in/telebot.v3"
 )
 
 const (
-	apiBase         = "https://api.telegram.org"
-	longPollTimeout = 25
+	longPollTimeout = 25 * time.Second
+	retryDelay      = 3 * time.Second
 )
 
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
+	api *tele.Bot
 }
 
-func NewClient(token string) *Client {
-	return &Client{
-		baseURL: apiBase,
-		token:   token,
-		httpClient: &http.Client{
-			Timeout: (longPollTimeout + 10) * time.Second,
-		},
+func NewClient(token string) (*Client, error) {
+	return newClient(tele.Settings{
+		Token:       token,
+		Poller:      &poller{timeout: longPollTimeout, retry: retryDelay},
+		Synchronous: true,
+		Offline:     true,
+		OnError:     logError,
+		Client:      &http.Client{Timeout: longPollTimeout + 10*time.Second},
+	})
+}
+
+func newClient(settings tele.Settings) (*Client, error) {
+	api, err := tele.NewBot(settings)
+	if err != nil {
+		return nil, fmt.Errorf("create telegram bot: %w", cleanError(err))
 	}
-}
-
-type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
-}
-
-type Message struct {
-	Text string `json:"text"`
-	From *User  `json:"from"`
-	Chat Chat   `json:"chat"`
-}
-
-type User struct {
-	ID        int64  `json:"id"`
-	Username  string `json:"username"`
-	FirstName string `json:"first_name"`
-}
-
-type Chat struct {
-	ID int64 `json:"id"`
-}
-
-type sendMessageRequest struct {
-	ChatID int64  `json:"chat_id"`
-	Text   string `json:"text"`
-}
-
-type apiResponse struct {
-	OK          bool            `json:"ok"`
-	Description string          `json:"description"`
-	Result      json.RawMessage `json:"result"`
+	return &Client{api: api}, nil
 }
 
 func (c *Client) SendText(ctx context.Context, chatID int64, text string) error {
-	body := sendMessageRequest{ChatID: chatID, Text: text}
-	if err := c.do(ctx, http.MethodPost, "sendMessage", nil, body, nil); err != nil {
-		return err
+	_, err := call(ctx, func() (*tele.Message, error) {
+		return c.api.Send(tele.ChatID(chatID), text)
+	})
+	if err != nil {
+		return fmt.Errorf("telegram send message: %w", cleanError(err))
 	}
 	return nil
 }
 
-func (c *Client) DeleteWebhook(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, "deleteWebhook", nil, nil, nil)
-}
-
 func (c *Client) Profile(ctx context.Context, userID int64) (string, string, error) {
-	query := url.Values{}
-	query.Set("chat_id", strconv.FormatInt(userID, 10))
-
-	var chat User
-	if err := c.do(ctx, http.MethodGet, "getChat", query, nil, &chat); err != nil {
-		return "", "", err
+	chat, err := call(ctx, func() (*tele.Chat, error) {
+		return c.api.ChatByID(userID)
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("telegram get chat: %w", cleanError(err))
 	}
 	return chat.Username, chat.FirstName, nil
 }
 
-func (c *Client) GetUpdates(ctx context.Context, offset int64) ([]Update, error) {
-	query := url.Values{}
-	query.Set("timeout", strconv.Itoa(longPollTimeout))
-	query.Set("allowed_updates", `["message"]`)
-	if offset > 0 {
-		query.Set("offset", strconv.FormatInt(offset, 10))
-	}
-
-	var updates []Update
-	if err := c.do(ctx, http.MethodGet, "getUpdates", query, nil, &updates); err != nil {
-		return nil, err
-	}
-	return updates, nil
-}
-
-func (c *Client) do(ctx context.Context, method, apiMethod string, query url.Values, body any, dest any) error {
-	endpoint := c.baseURL + "/bot" + c.token + "/" + apiMethod
-	if len(query) > 0 {
-		endpoint += "?" + query.Encode()
-	}
-
-	var payload io.Reader
-	if body != nil {
-		encoded, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("marshal %s: %w", apiMethod, err)
-		}
-		payload = bytes.NewReader(encoded)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, payload)
+func (c *Client) connect() error {
+	data, err := c.api.Raw("getMe", nil)
 	if err != nil {
-		return fmt.Errorf("build %s request: %w", apiMethod, err)
+		return fmt.Errorf("telegram get me: %w", cleanError(err))
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	var resp struct {
+		Result tele.User `json:"result"`
 	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err
-		}
-		return fmt.Errorf("telegram %s: %w", apiMethod, err)
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return fmt.Errorf("decode telegram get me: %w", err)
 	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("read %s response: %w", apiMethod, err)
-	}
-
-	var parsed apiResponse
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return fmt.Errorf("decode %s response: %w", apiMethod, err)
-	}
-	if !parsed.OK {
-		if parsed.Description == "" {
-			return fmt.Errorf("telegram %s: status %d", apiMethod, resp.StatusCode)
-		}
-		return fmt.Errorf("telegram %s: %s", apiMethod, parsed.Description)
-	}
-	if dest == nil || len(parsed.Result) == 0 || string(parsed.Result) == "null" {
-		return nil
-	}
-	if err := json.Unmarshal(parsed.Result, dest); err != nil {
-		return fmt.Errorf("decode %s result: %w", apiMethod, err)
+	c.api.Me = &resp.Result
+	if err := c.api.RemoveWebhook(); err != nil {
+		return fmt.Errorf("telegram delete webhook: %w", cleanError(err))
 	}
 	return nil
+}
+
+func call[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	type result struct {
+		value T
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		value, err := fn()
+		done <- result{value: value, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case res := <-done:
+		return res.value, res.err
+	}
+}
+
+func cleanError(err error) error {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok {
+		return fmt.Errorf("%s request: %w", urlErr.Op, urlErr.Err)
+	}
+	return err
+}
+
+func logError(err error, _ tele.Context) {
+	slog.Error("telegram", "err", cleanError(err))
 }
