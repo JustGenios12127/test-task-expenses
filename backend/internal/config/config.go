@@ -22,9 +22,9 @@ type Config struct {
 	PostgresPassword string
 	PostgresDB       string
 	PostgresSSLMode  string
-	GroqAPIKey       string
-	GroqModel        string
-	GroqBaseURL      string
+	LLMAPIKey        string
+	LLMModel         string
+	LLMBaseURL       string
 	TelegramBotToken string
 	Timezone         string
 }
@@ -42,9 +42,9 @@ func Load() (Config, error) {
 		PostgresPassword: os.Getenv("POSTGRES_PASSWORD"),
 		PostgresDB:       os.Getenv("POSTGRES_DB"),
 		PostgresSSLMode:  envOr("POSTGRES_SSLMODE", "disable"),
-		GroqAPIKey:       os.Getenv("GROQ_API_KEY"),
-		GroqModel:        envOr("GROQ_MODEL", "openai/gpt-oss-20b"),
-		GroqBaseURL:      envOr("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
+		LLMAPIKey:        os.Getenv("LLM_API_KEY"),
+		LLMModel:         os.Getenv("LLM_MODEL"),
+		LLMBaseURL:       os.Getenv("LLM_BASE_URL"),
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		Timezone:         envOr("APP_TIMEZONE", "Asia/Yekaterinburg"),
 	}
@@ -90,7 +90,9 @@ func (c Config) validate() error {
 		{name: "POSTGRES_USER", value: c.PostgresUser},
 		{name: "POSTGRES_PASSWORD", value: c.PostgresPassword},
 		{name: "POSTGRES_DB", value: c.PostgresDB},
-		{name: "GROQ_API_KEY", value: c.GroqAPIKey},
+		{name: "LLM_API_KEY", value: c.LLMAPIKey},
+		{name: "LLM_MODEL", value: c.LLMModel},
+		{name: "LLM_BASE_URL", value: c.LLMBaseURL},
 		{name: "TELEGRAM_BOT_TOKEN", value: c.TelegramBotToken},
 	}
 

@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"test-task-expenses/backend/internal/adapter/groq"
 	"test-task-expenses/backend/internal/adapter/httpapi"
+	"test-task-expenses/backend/internal/adapter/llm"
 	"test-task-expenses/backend/internal/adapter/postgres"
 	"test-task-expenses/backend/internal/adapter/telegram"
 	botapp "test-task-expenses/backend/internal/app/bot"
@@ -58,7 +58,7 @@ func main() {
 	}
 	repo := postgres.NewExpenseRepository(pool)
 	expenses := expenseapp.NewHandler(
-		groq.New(cfg.GroqAPIKey, cfg.GroqModel, cfg.GroqBaseURL),
+		llm.New(cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMBaseURL),
 		repo,
 		tgClient,
 		loc,

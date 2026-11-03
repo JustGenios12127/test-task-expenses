@@ -1,4 +1,4 @@
-package groq
+package llm
 
 import (
 	"context"
