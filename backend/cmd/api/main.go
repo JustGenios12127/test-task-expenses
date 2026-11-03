@@ -58,7 +58,7 @@ func main() {
 	}
 	repo := postgres.NewExpenseRepository(pool)
 	expenses := expenseapp.NewHandler(
-		expenseapp.WithFallback(groq.NewParser(cfg.GroqAPIKey, cfg.GroqModel, cfg.GroqAPIURL)),
+		groq.New(cfg.GroqAPIKey, cfg.GroqModel, cfg.GroqBaseURL),
 		repo,
 		tgClient,
 		loc,

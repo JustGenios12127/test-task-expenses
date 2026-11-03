@@ -125,28 +125,6 @@ func (r *ExpenseRepository) Total(ctx context.Context, query domain.Query) (int6
 	return total, count, nil
 }
 
-func (r *ExpenseRepository) FindLatest(ctx context.Context, query domain.Query) (domain.Expense, error) {
-	where, args, err := expenseFilter(query)
-	if err != nil {
-		return domain.Expense{}, err
-	}
-	row := r.pool.QueryRow(ctx, fmt.Sprintf(`
-		SELECT id, user_id, amount::text, category, spent_at, COALESCE(comment, ''), created_at, updated_at
-		FROM expenses
-		WHERE %s
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, where), args...)
-	item, err := scanExpense(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Expense{}, domain.ErrNotFound
-	}
-	if err != nil {
-		return domain.Expense{}, fmt.Errorf("find expense: %w", err)
-	}
-	return item, nil
-}
-
 func (r *ExpenseRepository) Get(ctx context.Context, userID, id int64) (domain.Expense, error) {
 	if userID <= 0 {
 		return domain.Expense{}, domain.ErrUserRequired

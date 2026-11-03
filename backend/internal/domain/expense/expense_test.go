@@ -37,66 +37,6 @@ func TestParseAmount(t *testing.T) {
 	}
 }
 
-func TestParseSimple(t *testing.T) {
-	today := time.Date(2026, 10, 30, 22, 0, 0, 0, time.FixedZone("+05", 5*60*60))
-
-	coffee, err := ParseSimple("кофе 350", today)
-	if err != nil {
-		t.Fatalf("coffee: %v", err)
-	}
-	if coffee.Amount != 35000 || coffee.Category != CategoryFood || coffee.Comment != "кофе" {
-		t.Fatalf("coffee = %+v", coffee)
-	}
-	if !coffee.SpentAt.Equal(time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("coffee date = %s", coffee.SpentAt)
-	}
-
-	taxi, err := ParseSimple("такси 1200 вчера", today)
-	if err != nil {
-		t.Fatalf("taxi: %v", err)
-	}
-	if taxi.Amount != 120000 || taxi.Category != CategoryTransport || taxi.Comment != "такси" {
-		t.Fatalf("taxi = %+v", taxi)
-	}
-	if !taxi.SpentAt.Equal(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("taxi date = %s", taxi.SpentAt)
-	}
-
-	metro, err := ParseSimple("вчера метро 80", today)
-	if err != nil {
-		t.Fatalf("metro: %v", err)
-	}
-	if metro.Category != CategoryTransport || !metro.SpentAt.Equal(time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("metro = %+v", metro)
-	}
-
-	products, err := ParseSimple("продукты 1 250,50", today)
-	if err != nil {
-		t.Fatalf("products: %v", err)
-	}
-	if products.Amount != 125050 || products.Category != CategoryFood {
-		t.Fatalf("products = %+v", products)
-	}
-
-	cinema, err := ParseSimple("позавчера кино 900", today)
-	if err != nil {
-		t.Fatalf("cinema: %v", err)
-	}
-	if cinema.Category != CategoryEntertainment || !cinema.SpentAt.Equal(time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("cinema = %+v", cinema)
-	}
-
-	if _, err := ParseSimple("привет", today); !errors.Is(err, ErrNotExpense) {
-		t.Fatalf("greeting error = %v", err)
-	}
-	if _, err := ParseSimple("завтра такси 500", today); !errors.Is(err, ErrNotExpense) {
-		t.Fatalf("tomorrow error = %v", err)
-	}
-	if _, err := ParseSimple("кофе 2 по 350", today); !errors.Is(err, ErrNotExpense) {
-		t.Fatalf("two amounts error = %v", err)
-	}
-}
-
 func TestNewRejectsForeignAndFutureData(t *testing.T) {
 	today := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	draft := Draft{
@@ -119,5 +59,17 @@ func TestNewRejectsForeignAndFutureData(t *testing.T) {
 	}
 	if item.UserID != 42 || item.NumericAmount() != "350.00" || FormatRubles(item.Amount) != "350 ₽" {
 		t.Fatalf("item = %+v", item)
+	}
+}
+
+func TestParseCategory(t *testing.T) {
+	for raw, want := range map[string]Category{"Еда": CategoryFood, " жилье ": CategoryHousing, "жильё": CategoryHousing} {
+		got, err := ParseCategory(raw)
+		if err != nil || got != want {
+			t.Fatalf("ParseCategory(%q) = %q, %v", raw, got, err)
+		}
+	}
+	if _, err := ParseCategory("кофе"); !errors.Is(err, ErrInvalidCategory) {
+		t.Fatalf("unknown category error = %v", err)
 	}
 }

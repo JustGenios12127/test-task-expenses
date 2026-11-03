@@ -11,6 +11,6 @@ cp backend/.env.example backend/.env
 docker compose up --build -d
 ```
 
-LLM настраивается переменными `GROQ_API_KEY`, `GROQ_MODEL` и `GROQ_API_URL`. Подойдёт любой сервис с OpenAI-совместимым API chat completions.
+LLM настраивается переменными `GROQ_API_KEY`, `GROQ_MODEL` и `GROQ_BASE_URL`. Подойдёт любой сервис с OpenAI-совместимым API chat completions.
 
 После запуска панель главы семьи открывается на [http://localhost](http://localhost). API доступен на [http://localhost:8080](http://localhost:8080).

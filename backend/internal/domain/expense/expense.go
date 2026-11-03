@@ -25,7 +25,6 @@ const maxAmount int64 = 9_999_999_999_99
 const maxCommentLen = 200
 
 var (
-	ErrNotExpense      = errors.New("not an expense")
 	ErrInvalidAmount   = errors.New("invalid amount")
 	ErrInvalidCategory = errors.New("invalid category")
 	ErrInvalidDate     = errors.New("invalid date")
@@ -195,32 +194,6 @@ func ParseCategory(raw string) (Category, error) {
 	return "", ErrInvalidCategory
 }
 
-func NormalizeCategory(raw string) Category {
-	if category, err := ParseCategory(raw); err == nil {
-		return category
-	}
-	folded := foldYo(strings.TrimSpace(raw))
-	if folded == "" {
-		return ""
-	}
-	if category, ok := categoryAliases[folded]; ok {
-		return category
-	}
-	return ""
-}
-
-func CategoryFromText(text string) Category {
-	folded := foldYo(text)
-	for _, item := range categoryKeywords {
-		for _, word := range item.words {
-			if strings.Contains(folded, word) {
-				return item.category
-			}
-		}
-	}
-	return CategoryOther
-}
-
 func DateUTC(value time.Time) time.Time {
 	if value.IsZero() {
 		return time.Time{}
@@ -251,39 +224,4 @@ func truncate(value string, limit int) string {
 
 func foldYo(value string) string {
 	return strings.ReplaceAll(strings.ToLower(value), "ё", "е")
-}
-
-type keywordCategory struct {
-	category Category
-	words    []string
-}
-
-var categoryAliases = map[string]Category{
-	"продукты":   CategoryFood,
-	"продукт":    CategoryFood,
-	"питание":    CategoryFood,
-	"еду":        CategoryFood,
-	"проезд":     CategoryTransport,
-	"дорога":     CategoryTransport,
-	"бензин":     CategoryTransport,
-	"коммуналка": CategoryHousing,
-	"аренда":     CategoryHousing,
-	"квартира":   CategoryHousing,
-	"лекарства":  CategoryHealth,
-	"аптека":     CategoryHealth,
-	"медицина":   CategoryHealth,
-	"досуг":      CategoryEntertainment,
-	"одежда":     CategoryShopping,
-	"вещи":       CategoryShopping,
-	"прочее":     CategoryOther,
-	"разное":     CategoryOther,
-}
-
-var categoryKeywords = []keywordCategory{
-	{category: CategoryFood, words: []string{"кофе", "кафе", "обед", "ужин", "завтрак", "продукт", "еда", "чай", "ресторан", "пирож", "булоч", "столов"}},
-	{category: CategoryTransport, words: []string{"такси", "метро", "автобус", "бензин", "транспорт", "каршер", "электрич", "маршрутка", "самокат"}},
-	{category: CategoryHousing, words: []string{"аренд", "квартир", "жкх", "коммунал", "ипотек", "жиль"}},
-	{category: CategoryEntertainment, words: []string{"кино", "театр", "игр", "концерт", "развлеч"}},
-	{category: CategoryHealth, words: []string{"аптек", "врач", "лекар", "стоматолог", "анализ", "здоров"}},
-	{category: CategoryShopping, words: []string{"одежд", "обув", "техник", "покупк"}},
 }

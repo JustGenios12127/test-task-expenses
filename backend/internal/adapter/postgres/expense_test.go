@@ -25,9 +25,6 @@ func TestAddRequiresUserID(t *testing.T) {
 	if _, _, err := repo.Total(ctx, domain.Query{}); !errors.Is(err, domain.ErrUserRequired) {
 		t.Fatalf("total error = %v", err)
 	}
-	if _, err := repo.FindLatest(ctx, domain.Query{}); !errors.Is(err, domain.ErrUserRequired) {
-		t.Fatalf("find error = %v", err)
-	}
 	if _, err := repo.Update(ctx, 0, 1, domain.Patch{Amount: 100}); !errors.Is(err, domain.ErrUserRequired) {
 		t.Fatalf("update error = %v", err)
 	}
@@ -172,11 +169,11 @@ func TestChangesStayWithOwner(t *testing.T) {
 	if changed.Amount != 45000 || changed.UserID != 10 {
 		t.Fatalf("changed = %+v", changed)
 	}
-	still, err := repo.FindLatest(ctx, domain.Query{UserID: 20, Amount: 35000})
+	still, err := repo.List(ctx, domain.Query{UserID: 20, Amount: 35000})
 	if err != nil {
 		t.Fatalf("other coffee: %v", err)
 	}
-	if still.ID != other.ID || still.Amount != 35000 {
+	if len(still) != 1 || still[0].ID != other.ID || still[0].Amount != 35000 {
 		t.Fatalf("other changed = %+v", still)
 	}
 
@@ -190,8 +187,8 @@ func TestChangesStayWithOwner(t *testing.T) {
 	if deleted.Comment != "такси" {
 		t.Fatalf("deleted = %+v", deleted)
 	}
-	if _, err := repo.FindLatest(ctx, domain.Query{UserID: 10, Match: "такси"}); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("taxi still visible: %v", err)
+	if found, err := repo.List(ctx, domain.Query{UserID: 10, Match: "такси"}); err != nil || len(found) != 0 {
+		t.Fatalf("taxi still visible: %+v, %v", found, err)
 	}
 	left, err := repo.List(ctx, domain.Query{UserID: 10, Limit: 10})
 	if err != nil {
@@ -293,8 +290,8 @@ func TestPanelFiltersAndVersion(t *testing.T) {
 		t.Fatalf("bot total = %d err = %v", own, err)
 	}
 
-	found, err := repo.FindLatest(ctx, domain.Query{UserID: 30, Match: "заправку"})
-	if err != nil || found.ID != fuel.ID {
+	found, err := repo.List(ctx, domain.Query{UserID: 30, Match: "заправку"})
+	if err != nil || len(found) != 1 || found[0].ID != fuel.ID {
 		t.Fatalf("stem match = %+v err = %v", found, err)
 	}
 
