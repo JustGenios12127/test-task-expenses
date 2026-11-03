@@ -97,7 +97,10 @@ func (h *Handler) Handle(ctx context.Context, cmd Command) error {
 }
 
 func (h *Handler) converse(ctx context.Context, userID int64, today time.Time, exchange []chat.Message) (string, []chat.Message, error) {
-	system := systemPrompt(today)
+	system, err := systemPrompt(today)
+	if err != nil {
+		return "", nil, err
+	}
 	for range maxSteps {
 		answer, err := h.model.Complete(ctx, system, append(h.recent(userID), exchange...), tools)
 		if err != nil {
