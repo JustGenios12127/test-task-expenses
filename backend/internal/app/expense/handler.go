@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"test-task-expenses/backend/internal/app/replies"
 	"test-task-expenses/backend/internal/domain/chat"
 	domain "test-task-expenses/backend/internal/domain/expense"
 )
@@ -84,13 +85,13 @@ func (h *Handler) Handle(ctx context.Context, cmd Command) error {
 		return nil
 	}
 	if strings.HasPrefix(text, "/") {
-		return h.send(ctx, cmd, "Команды не нужны. Напиши трату, например: «кофе 350».")
+		return h.send(ctx, cmd, replies.NoCommands)
 	}
 
 	exchange := []chat.Message{{Role: chat.RoleUser, Text: limitText(text, maxInputRunes)}}
 	reply, exchange, err := h.converse(ctx, cmd.UserID, h.now(), exchange)
 	if err != nil {
-		return errors.Join(err, h.send(ctx, cmd, "Не получилось обработать сообщение. Попробуй ещё раз."))
+		return errors.Join(err, h.send(ctx, cmd, replies.Failed))
 	}
 	h.remember(cmd.UserID, exchange)
 	return h.send(ctx, cmd, reply)

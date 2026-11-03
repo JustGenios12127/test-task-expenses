@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"test-task-expenses/backend/internal/app/replies"
 	"test-task-expenses/backend/internal/domain/chat"
 	domain "test-task-expenses/backend/internal/domain/expense"
 )
@@ -386,7 +387,7 @@ func TestHistoryKeepsRecentExchanges(t *testing.T) {
 func TestModelFailureSendsApology(t *testing.T) {
 	sender := &fakeSender{}
 	err := newTestHandler(&scriptedModel{err: errors.New("llm down")}, &memoryStore{}, sender).Handle(context.Background(), Command{UserID: 55, ChatID: 77, Text: "кофе 350"})
-	if err == nil || !strings.Contains(sender.last(), "Попробуй ещё раз") {
+	if err == nil || sender.last() != replies.Failed {
 		t.Fatalf("err = %v, sent = %q", err, sender.last())
 	}
 }
@@ -409,7 +410,7 @@ func TestCommandsSkipModel(t *testing.T) {
 	if err := newTestHandler(model, &memoryStore{}, sender).Handle(context.Background(), Command{UserID: 55, ChatID: 77, Text: "/help"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	if len(model.calls) != 0 || !strings.Contains(sender.last(), "Команды не нужны") {
+	if len(model.calls) != 0 || sender.last() != replies.NoCommands {
 		t.Fatalf("calls = %d, sent = %q", len(model.calls), sender.last())
 	}
 }

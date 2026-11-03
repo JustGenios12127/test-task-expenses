@@ -3,7 +3,8 @@ package bot
 import (
 	"context"
 	"fmt"
-	"strings"
+
+	"test-task-expenses/backend/internal/app/replies"
 )
 
 type Messenger interface {
@@ -24,17 +25,8 @@ func NewStartHandler(messenger Messenger) *StartHandler {
 }
 
 func (h *StartHandler) HandleStart(ctx context.Context, cmd StartCommand) error {
-	if err := h.messenger.SendText(ctx, cmd.ChatID, greeting(cmd.FirstName)); err != nil {
+	if err := h.messenger.SendText(ctx, cmd.ChatID, replies.Greeting(cmd.FirstName)); err != nil {
 		return fmt.Errorf("send greeting: %w", err)
 	}
 	return nil
-}
-
-func greeting(firstName string) string {
-	name := strings.TrimSpace(firstName)
-	hello := "Привет!"
-	if name != "" {
-		hello = "Привет, " + name + "!"
-	}
-	return hello + "\n\nЯ помогу записывать расходы."
 }
